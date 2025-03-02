@@ -1,0 +1,14 @@
+volumes:
+  database_data:
+
+services:
+  database:
+    image: postgres:17
+    volumes:
+      - database_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: 'StrongPassword'
+      POSTGRES_USER: api
+      POSTGRES_DB: ourfitnessgal
+    ports:
+      - 5432:5432
