@@ -1,46 +1,86 @@
+mod errors;
 mod models;
 mod schema;
 
-use diesel::prelude::*;
-use dotenvy::dotenv;
 use self::models::*;
-use std::env;
+use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+use diesel::{
+    prelude::*,
+    r2d2::{ConnectionManager, Pool},
+    result::DatabaseErrorKind,
+};
+use dotenvy::dotenv;
+use errors::InternalErrExt;
+use std::{
+    env,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+};
 
-pub fn establish_connection() -> PgConnection {
-    dotenv().ok();
-
+pub fn get_connection_pool() -> Pool<ConnectionManager<PgConnection>> {
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgConnection::establish(&database_url)
-        .unwrap_or_else(|_| panic!("Error connecting to {}", database_url))
+    let manager = ConnectionManager::<PgConnection>::new(database_url);
+    Pool::builder()
+        .test_on_check_out(true)
+        .build(manager)
+        .expect("Could not build connection pool")
 }
 
-pub fn create_user(conn: &mut PgConnection, username: &str, email: &str, password: &str) -> User {
+#[derive(Clone)]
+struct AppState {
+    pool: Pool<ConnectionManager<PgConnection>>,
+}
+
+async fn register_user(
+    State(state): State<AppState>,
+    Json(payload): Json<UserInfo>,
+) -> Result<Json<User>, StatusCode> {
     use crate::schema::users;
 
-    let new_user = UserInfo { username, email, password };
+    let mut conn = state.pool.get().map_internal_err()?;
 
-    diesel::insert_into(users::table)
-        .values(&new_user)
+    let created_user = diesel::insert_into(users::table)
+        .values(&payload)
         .returning(User::as_returning())
-        .get_result(conn)
-        .expect("Error registering new user")
+        .get_result(&mut conn)
+        .map_err(|e| {
+            if let diesel::result::Error::DatabaseError(DatabaseErrorKind::UniqueViolation, _) = e {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })?;
+
+    Ok(Json(created_user))
 }
 
-fn main() {
-    use self::schema::users::dsl::*;
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt::init();
 
-    let connection = &mut establish_connection();
+    dotenv().ok();
 
-    create_user(connection, "QwEekYhyo", "bite@gmail.com", "password");
+    let state = AppState {
+        pool: get_connection_pool(),
+    };
 
-    let results = users
-        .select(User::as_select())
-        .load(connection)
-        .expect("Error loading users");
+    let app = Router::new()
+        .route("/register", post(register_user))
+        .with_state(state);
 
-    println!("Displaying {} users", results.len());
-    for user in results {
-        println!("{}", user.username);
-        println!("{}", user.email);
-    }
+    let addr = env::var("ADDR")
+        .ok()
+        .map(|s| s.parse::<IpAddr>().expect("invalid address"));
+    let port = env::var("PORT")
+        .ok()
+        .map(|s| s.parse::<u16>().expect("invalid port"));
+
+    let sockaddr = SocketAddr::from((
+        addr.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+        port.unwrap_or(3000),
+    ));
+    tracing::info!("Listening on http://{sockaddr}");
+
+    let listener = tokio::net::TcpListener::bind(&sockaddr).await.unwrap();
+
+    axum::serve(listener, app).await.unwrap();
 }

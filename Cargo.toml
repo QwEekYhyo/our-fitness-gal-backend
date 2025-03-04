@@ -4,5 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-diesel = { version = "2.2.0", features = ["postgres"] }
+axum = { version = "0.8.1", features = ["macros"] }
+diesel = { version = "2.2.0", features = ["postgres", "r2d2"] }
 dotenvy = "0.15"
+serde = { version = "1.0.218", features = ["derive"] }
+tokio = { version = "1.43.0", features = ["full"] }
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
