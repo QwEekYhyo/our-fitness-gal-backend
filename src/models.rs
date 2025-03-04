@@ -21,3 +21,19 @@ pub struct UserInfo {
     pub email: String,
     pub password: String,
 }
+
+#[derive(Deserialize)]
+pub struct LoginCredentials {
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Claims {
+    pub user_id: i32,
+}
+
+#[derive(Serialize)]
+pub struct Token {
+    pub token: String,
+}
