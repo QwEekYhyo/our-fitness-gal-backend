@@ -11,7 +11,7 @@ use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use diesel::{
     prelude::*,
     r2d2::{ConnectionManager, Pool},
-    result::DatabaseErrorKind,
+    result::{DatabaseErrorKind, Error::DatabaseError},
 };
 use dotenvy::dotenv;
 use errors::InternalErrExt;
@@ -57,7 +57,7 @@ async fn register_user(
         .returning(User::as_returning())
         .get_result(&mut conn)
         .map_err(|e| {
-            if let diesel::result::Error::DatabaseError(DatabaseErrorKind::UniqueViolation, _) = e {
+            if let DatabaseError(DatabaseErrorKind::UniqueViolation, _) = e {
                 StatusCode::CONFLICT
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
@@ -65,6 +65,15 @@ async fn register_user(
         })?;
 
     Ok(Json(created_user))
+}
+
+fn random_hash() -> Result<(), StatusCode> {
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+
+    argon2.hash_password(b"fakepassword", &salt).map_internal_err()?;
+
+    Ok(())
 }
 
 async fn login(
@@ -75,10 +84,17 @@ async fn login(
 
     let mut conn = state.pool.get().map_internal_err()?;
 
-    let target_user: User = users
+    let target_user = users
         .filter(email.eq(credentials.email))
+        .select(User::as_select())
         .first(&mut conn)
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+        .optional()
+        .map_internal_err()?;
+
+    let Some(target_user) = target_user else {
+        random_hash()?;
+        return Err(StatusCode::UNAUTHORIZED);
+    };
 
     let password_hash = PasswordHash::new(&target_user.password).map_internal_err()?;
 
@@ -101,7 +117,7 @@ async fn login(
     )
     .map_internal_err()?;
 
-    Ok(Json(Token { token: token }))
+    Ok(Json(Token { token }))
 }
 
 #[tokio::main]
