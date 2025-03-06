@@ -4,7 +4,13 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHasher, PasswordVerifier, SaltString},
     Argon2, PasswordHash,
 };
-use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    middleware,
+    routing::{get, post},
+    Extension, Json, Router,
+};
 use diesel::{
     prelude::*,
     result::{DatabaseErrorKind, Error::DatabaseError},
@@ -13,6 +19,7 @@ use diesel::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    auth::{self, Claims},
     errors::InternalErrExt,
     models::{User, UserInfo},
     utils::random_hash,
@@ -23,6 +30,13 @@ pub fn router<S>(state: AppState) -> Router<S> {
     Router::new()
         .route("/register", post(register))
         .route("/login", post(login))
+        .route(
+            "/me",
+            get(me).route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth::middleware,
+            )),
+        )
         .with_state(state)
 }
 
@@ -59,18 +73,13 @@ async fn register(
     Ok(Json(created_user))
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct LoginCredentials {
     pub email: String,
     pub password: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Claims {
-    pub user_id: i32,
-}
-
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct Token {
     pub token: String,
 }
@@ -117,4 +126,11 @@ async fn login(
     .map_internal_err()?;
 
     Ok(Json(Token { token }))
+}
+
+pub async fn me(
+    State(_state): State<AppState>,
+    Extension(user): Extension<User>,
+) -> Result<Json<User>, StatusCode> {
+    Ok(Json(user))
 }
